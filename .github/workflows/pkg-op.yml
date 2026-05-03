@@ -1,0 +1,39 @@
+name: pkg-op
+run-name: ${{ inputs.correlation_id }}
+
+# Thin stub: the real logic lives in makerloftai/pkg-op-runner so every
+# scaffolded app stays in sync with one update. This file only exists
+# because `workflow_dispatch` requires the trigger to live in the repo
+# being dispatched to. Don't edit — makerloft's upgrade path will
+# overwrite it if inputs change.
+
+on:
+  workflow_dispatch:
+    inputs:
+      correlation_id: { required: true,  type: string }
+      kind:           { required: true,  type: string }
+      action:         { required: true,  type: string }
+      package:        { required: true,  type: string }
+      version:        { required: false, type: string }
+      dev:            { required: false, type: string, default: "false" }
+
+permissions:
+  contents: read
+
+jobs:
+  call:
+    # Pinned to a specific commit SHA. A mutable @main pin would let any
+    # compromise of the pkg-op-runner repo cascade to every user app's
+    # next package-add (workflow runs with read-only token, but the
+    # output bytes flow back through MakerLoft's GitHub App and land in
+    # the user repo). Bump deliberately when pkg-op-runner ships changes
+    # to its inputs/outputs; the comment carries the branch the SHA was
+    # taken from for traceability.
+    uses: makerloftai/pkg-op-runner/.github/workflows/pkg-op.yml@d4acfc761b7393299b231678411ca3383c71d442 # main as of 2026-04-26
+    with:
+      correlation_id: ${{ inputs.correlation_id }}
+      kind:           ${{ inputs.kind }}
+      action:         ${{ inputs.action }}
+      package:        ${{ inputs.package }}
+      version:        ${{ inputs.version }}
+      dev:            ${{ inputs.dev }}
