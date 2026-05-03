@@ -27,9 +27,9 @@
             body { margin: 0; overflow: hidden; background-color: #87CEEB; user-select: none; }
             canvas { display: block; cursor: crosshair; }
             #ui { position: absolute; top: 0; left: 0; width: 100%; padding: 20px; pointer-events: none; display: flex; justify-content: space-between; box-sizing: border-box; }
-            .stat { font-size: 24px; font-weight: bold; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+            .stat { font-size: 28px; font-weight: bold; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
             #game-over { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); color: white; flex-direction: column; align-items: center; justify-content: center; z-index: 10; }
-            #game-over h1 { font-size: 48px; margin-bottom: 20px; }
+            #game-over h1 { font-size: 64px; margin-bottom: 20px; }
             #start-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 20; }
         </style>
     </head>
@@ -41,15 +41,18 @@
         </div>
 
         <div id="start-screen">
-            <h1 class="text-5xl font-bold mb-4">Bird Hunter</h1>
-            <p class="mb-8 text-xl">Click to shoot the birds. You have 60 seconds!</p>
-            <button id="start-btn" class="btn btn-primary btn-lg">Start Game</button>
+            <h1 class="text-6xl font-bold mb-4">Bird Hunter</h1>
+            <p class="mb-8 text-2xl text-center max-w-2xl">
+                Click to shoot the birds. You have 60 seconds!<br>
+                <span class="text-lg text-gray-300 mt-2 block">Small Red Birds = 30pts | Medium Colorful Birds = 10pts | Big Gray Birds = 5pts</span>
+            </p>
+            <button id="start-btn" class="btn btn-primary btn-lg px-8 text-xl">Start Game</button>
         </div>
 
         <div id="game-over">
-            <h1 class="text-5xl font-bold">Game Over!</h1>
-            <p class="text-2xl mb-8">Final Score: <span id="final-score">0</span></p>
-            <button id="restart-btn" class="btn btn-primary btn-lg">Play Again</button>
+            <h1 class="text-6xl font-bold text-center">Time's Up!</h1>
+            <p class="text-4xl mb-8">Final Score: <span id="final-score">0</span></p>
+            <button id="restart-btn" class="btn btn-primary btn-lg px-8 text-xl">Play Again</button>
         </div>
 
         <canvas id="gameCanvas"></canvas>
@@ -61,12 +64,62 @@
             let w, h;
             let birds = [];
             let particles = [];
+            let floatingTexts = [];
             let score = 0;
             let timeLeft = 60;
             let isPlaying = false;
             let lastTime = 0;
             let spawnTimer = 0;
             let gameInterval = null;
+
+            // Audio Context for sound effects
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            let audioCtx = null;
+
+            function initAudio() {
+                if (!audioCtx) {
+                    audioCtx = new AudioContext();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+            }
+
+            function playShotSound() {
+                if (!audioCtx) return;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            }
+
+            function playHitSound() {
+                if (!audioCtx) return;
+                const osc = audioCtx.createOscillator();
+                const gain = audioCtx.createGain();
+                
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(400, audioCtx.currentTime + 0.1);
+                
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            }
 
             function resize() {
                 w = canvas.width = window.innerWidth;
@@ -75,21 +128,68 @@
             window.addEventListener('resize', resize);
             resize();
 
+            class FloatingText {
+                constructor(x, y, text, color) {
+                    this.x = x;
+                    this.y = y;
+                    this.text = text;
+                    this.color = color;
+                    this.life = 1.0;
+                    this.vy = -60; // Float upwards
+                }
+                update(dt) {
+                    this.y += this.vy * dt;
+                    this.life -= dt * 1.5; // Fade out speed
+                }
+                draw(ctx) {
+                    ctx.save();
+                    ctx.globalAlpha = Math.max(0, this.life);
+                    ctx.fillStyle = this.color;
+                    ctx.font = "bold 24px sans-serif";
+                    ctx.shadowColor = "rgba(0,0,0,0.5)";
+                    ctx.shadowBlur = 4;
+                    ctx.shadowOffsetX = 2;
+                    ctx.shadowOffsetY = 2;
+                    ctx.fillText(this.text, this.x, this.y);
+                    ctx.restore();
+                }
+            }
+
             class Bird {
                 constructor() {
                     this.y = Math.random() * (h * 0.6) + (h * 0.1);
+                    this.baseY = this.y;
                     this.direction = Math.random() > 0.5 ? 1 : -1;
-                    this.x = this.direction === 1 ? -50 : w + 50;
-                    this.speed = Math.random() * 100 + 150; // pixels per second
-                    this.size = 30;
+                    this.x = this.direction === 1 ? -100 : w + 100;
+                    
+                    const typeRoll = Math.random();
+                    if (typeRoll > 0.8) {
+                        // Small fast bird
+                        this.speed = Math.random() * 150 + 250; // 250 to 400
+                        this.size = 18;
+                        this.points = 30;
+                        this.color = '#ff3333';
+                    } else if (typeRoll > 0.3) {
+                        // Medium bird
+                        this.speed = Math.random() * 100 + 150; // 150 to 250
+                        this.size = 28;
+                        this.points = 10;
+                        this.color = `hsl(${Math.random() * 360}, 80%, 50%)`;
+                    } else {
+                        // Large slow bird
+                        this.speed = Math.random() * 50 + 80; // 80 to 130
+                        this.size = 45;
+                        this.points = 5;
+                        this.color = '#555555';
+                    }
+                    
                     this.flapTime = 0;
-                    this.color = `hsl(${Math.random() * 360}, 80%, 50%)`;
                 }
 
                 update(dt) {
                     this.x += this.speed * this.direction * dt;
-                    this.flapTime += dt * 10;
-                    this.y += Math.sin(this.flapTime) * 2; // wavy motion
+                    this.flapTime += dt * (this.speed / 15);
+                    this.y = this.baseY + Math.sin(this.flapTime * 0.2) * (this.size * 1.5); // wavy motion
                 }
 
                 draw(ctx) {
@@ -111,7 +211,7 @@
                     ctx.fill();
 
                     // Beak
-                    ctx.fillStyle = 'orange';
+                    ctx.fillStyle = '#ffaa00';
                     ctx.beginPath();
                     ctx.moveTo(this.size * 1.2, -this.size * 0.2);
                     ctx.lineTo(this.size * 1.8, -this.size * 0.1);
@@ -128,11 +228,11 @@
                     // Eye
                     ctx.fillStyle = 'white';
                     ctx.beginPath();
-                    ctx.arc(this.size * 0.9, -this.size * 0.3, 4, 0, Math.PI*2);
+                    ctx.arc(this.size * 0.9, -this.size * 0.3, this.size * 0.15, 0, Math.PI*2);
                     ctx.fill();
                     ctx.fillStyle = 'black';
                     ctx.beginPath();
-                    ctx.arc(this.size * 0.95, -this.size * 0.3, 2, 0, Math.PI*2);
+                    ctx.arc(this.size * 0.95, -this.size * 0.3, this.size * 0.08, 0, Math.PI*2);
                     ctx.fill();
 
                     ctx.restore();
@@ -147,11 +247,11 @@
                 constructor(x, y, color) {
                     this.x = x;
                     this.y = y;
-                    this.vx = (Math.random() - 0.5) * 400;
-                    this.vy = (Math.random() - 0.5) * 400;
+                    this.vx = (Math.random() - 0.5) * 500;
+                    this.vy = (Math.random() - 0.5) * 500;
                     this.life = 1.0;
                     this.color = color;
-                    this.size = Math.random() * 5 + 3;
+                    this.size = Math.random() * 6 + 3;
                 }
                 update(dt) {
                     this.x += this.vx * dt;
@@ -169,10 +269,12 @@
             }
 
             function startGame() {
+                initAudio();
                 score = 0;
                 timeLeft = 60;
                 birds = [];
                 particles = [];
+                floatingTexts = [];
                 isPlaying = true;
                 lastTime = performance.now();
                 document.getElementById('score').innerText = score;
@@ -202,28 +304,37 @@
             canvas.addEventListener('mousedown', (e) => {
                 if (!isPlaying) return;
                 
+                initAudio();
+                playShotSound();
+
                 const rect = canvas.getBoundingClientRect();
                 const mouseX = e.clientX - rect.left;
                 const mouseY = e.clientY - rect.top;
 
                 let hit = false;
+                // Check in reverse so we hit the one drawn on top
                 for (let i = birds.length - 1; i >= 0; i--) {
                     const b = birds[i];
                     const dx = mouseX - b.x;
                     const dy = mouseY - b.y;
-                    // Check collision roughly using a circle
-                    if (dx * dx + dy * dy < b.size * b.size * 2) {
+                    
+                    if (dx * dx + dy * dy < b.size * b.size * 1.5) {
                         hit = true;
-                        score += 10;
+                        score += b.points;
                         document.getElementById('score').innerText = score;
                         
+                        playHitSound();
+
+                        // spawn floating text
+                        floatingTexts.push(new FloatingText(b.x, b.y, "+" + b.points, "#00ff00"));
+
                         // spawn particles
-                        for(let p=0; p<15; p++) {
+                        for(let p=0; p<20; p++) {
                             particles.push(new Particle(b.x, b.y, b.color));
                         }
                         
                         birds.splice(i, 1);
-                        break; // only hit one bird per shot
+                        break; 
                     }
                 }
             });
@@ -237,17 +348,17 @@
                 // Clear screen
                 ctx.clearRect(0, 0, w, h);
 
-                // Draw background landscape hints (clouds/mountains)
+                // Draw landscape hints
                 drawBackground();
 
                 // Spawn birds
                 spawnTimer -= dt;
                 if (spawnTimer <= 0) {
                     birds.push(new Bird());
-                    spawnTimer = Math.random() * 1 + 0.5; // Spawn every 0.5 to 1.5 seconds
+                    spawnTimer = Math.random() * 0.8 + 0.3; // Spawn faster: every 0.3 to 1.1s
                 }
 
-                // Update and draw birds
+                // Update & draw birds
                 for (let i = birds.length - 1; i >= 0; i--) {
                     const b = birds[i];
                     b.update(dt);
@@ -257,7 +368,7 @@
                     }
                 }
 
-                // Update and draw particles
+                // Update & draw particles
                 for (let i = particles.length - 1; i >= 0; i--) {
                     const p = particles[i];
                     p.update(dt);
@@ -267,22 +378,38 @@
                     }
                 }
 
+                // Update & draw floating texts
+                for (let i = floatingTexts.length - 1; i >= 0; i--) {
+                    const ft = floatingTexts[i];
+                    ft.update(dt);
+                    ft.draw(ctx);
+                    if (ft.life <= 0) {
+                        floatingTexts.splice(i, 1);
+                    }
+                }
+
                 requestAnimationFrame(loop);
             }
 
             function drawBackground() {
                 // Clouds
-                ctx.fillStyle = 'rgba(255,255,255,0.4)';
+                ctx.fillStyle = 'rgba(255,255,255,0.6)';
                 ctx.beginPath();
-                ctx.arc(w*0.2, h*0.2, 50, 0, Math.PI*2);
-                ctx.arc(w*0.25, h*0.2, 60, 0, Math.PI*2);
-                ctx.arc(w*0.3, h*0.2, 40, 0, Math.PI*2);
+                ctx.arc(w*0.2, h*0.2, 60, 0, Math.PI*2);
+                ctx.arc(w*0.25, h*0.2, 80, 0, Math.PI*2);
+                ctx.arc(w*0.3, h*0.2, 50, 0, Math.PI*2);
                 ctx.fill();
 
                 ctx.beginPath();
-                ctx.arc(w*0.7, h*0.3, 40, 0, Math.PI*2);
-                ctx.arc(w*0.75, h*0.25, 70, 0, Math.PI*2);
-                ctx.arc(w*0.8, h*0.3, 50, 0, Math.PI*2);
+                ctx.arc(w*0.7, h*0.3, 50, 0, Math.PI*2);
+                ctx.arc(w*0.75, h*0.25, 90, 0, Math.PI*2);
+                ctx.arc(w*0.8, h*0.3, 60, 0, Math.PI*2);
+                ctx.fill();
+
+                // Sun
+                ctx.fillStyle = '#FFD700';
+                ctx.beginPath();
+                ctx.arc(w*0.9, h*0.15, 40, 0, Math.PI*2);
                 ctx.fill();
 
                 // Ground
@@ -290,7 +417,7 @@
                 ctx.beginPath();
                 ctx.moveTo(0, h);
                 ctx.lineTo(0, h * 0.8);
-                ctx.quadraticCurveTo(w * 0.5, h * 0.7, w, h * 0.85);
+                ctx.quadraticCurveTo(w * 0.5, h * 0.65, w, h * 0.85);
                 ctx.lineTo(w, h);
                 ctx.fill();
             }
